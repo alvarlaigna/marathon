@@ -9,6 +9,7 @@ import javax.servlet.http.{ HttpServletRequest, HttpServletResponse }
 import mesosphere.UnitTest
 import mesosphere.chaos.http.HttpConf
 import mesosphere.marathon.core.election.ElectionService
+import mesosphere.marathon.MarathonSchedulerService
 import akka.http.scaladsl.model.StatusCodes._
 import org.mockito.Mockito._
 import org.rogach.scallop.ScallopConf
@@ -25,12 +26,13 @@ class LeaderProxyFilterTest extends UnitTest {
 
   case class Fixture(
       conf: HttpConf = httpConf(),
+      marathonSchedulerService: MarathonSchedulerService = mock[MarathonSchedulerService]("marathonSchedulerService"),
       electionService: ElectionService = mock[ElectionService]("electionService"),
       forwarder: RequestForwarder = mock[RequestForwarder]("forwarder"),
       request: HttpServletRequest = mock[HttpServletRequest]("request"),
       response: HttpServletResponse = mock[HttpServletResponse]("response"),
       chain: FilterChain = mock[FilterChain]("chain")) {
-    val filter = new LeaderProxyFilter(conf, electionService, "host:10000", forwarder) {
+    val filter = new LeaderProxyFilter(conf, marathonSchedulerService, electionService, "host:10000", forwarder) {
       override def sleep() = {}
     }
 
@@ -40,7 +42,8 @@ class LeaderProxyFilterTest extends UnitTest {
   "LeaderProxyFilter" should {
     "we are leader" in new Fixture {
       // When we are leader
-      when(electionService.isLeader).thenReturn(true)
+      marathonSchedulerService.leaderReady returns (true)
+      electionService.isLeader returns (true)
 
       // And doFilter is called
       filter.doFilter(request, response, chain)
@@ -61,8 +64,8 @@ class LeaderProxyFilterTest extends UnitTest {
       filter.doFilter(request, response, chain)
 
       // we pass that request down the chain
-      verify(electionService, times(12)).isLeader
-      verify(electionService, times(12)).leaderHostPort
+      verify(electionService, times(11)).isLeader
+      verify(electionService, times(11)).leaderHostPort
       verify(response, times(1))
         .sendError(ServiceUnavailable.intValue, LeaderProxyFilter.ERROR_STATUS_NO_CURRENT_LEADER)
       verifyClean()
@@ -135,8 +138,8 @@ class LeaderProxyFilterTest extends UnitTest {
       filter.doFilter(request, response, chain)
 
       // we pass that request down the chain
-      verify(electionService, times(4)).isLeader
-      verify(electionService, times(4)).leaderHostPort
+      verify(electionService, times(3)).isLeader
+      verify(electionService, times(3)).leaderHostPort
       verify(forwarder, times(1)).forward(new URL("http://otherhost:9999/test"), request, response)
       verify(request, atLeastOnce).getRequestURI
       verify(request, atLeastOnce).getQueryString
@@ -145,8 +148,8 @@ class LeaderProxyFilterTest extends UnitTest {
 
     "successfully wait for consistent leadership info, then we are leader" in new Fixture {
       // When we have inconsistent leadership info
-      when(electionService.isLeader).thenReturn(false, false, true)
-      when(electionService.leaderHostPort).thenReturn(Some("host:10000"))
+      marathonSchedulerService.leaderReady returns (false, false, true)
+      electionService.isLeader returns (true)
       when(request.getRequestURI).thenReturn("/test")
       when(request.getQueryString).thenReturn(null)
 
@@ -154,8 +157,7 @@ class LeaderProxyFilterTest extends UnitTest {
       filter.doFilter(request, response, chain)
 
       // we pass that request down the chain
-      verify(electionService, times(4)).isLeader
-      verify(electionService, times(3)).leaderHostPort
+      verify(electionService, times(3)).isLeader
       verify(response, times(1)).addHeader(LeaderProxyFilter.HEADER_MARATHON_LEADER, "http://host:10000")
       verify(chain, times(1)).doFilter(request, response)
       verifyClean()
@@ -172,8 +174,8 @@ class LeaderProxyFilterTest extends UnitTest {
       filter.doFilter(request, response, chain)
 
       // we pass that request down the chain
-      verify(electionService, times(12)).isLeader
-      verify(electionService, times(12)).leaderHostPort
+      verify(electionService, times(11)).isLeader
+      verify(electionService, times(11)).leaderHostPort
       verify(response, times(1))
         .sendError(ServiceUnavailable.intValue, LeaderProxyFilter.ERROR_STATUS_NO_CURRENT_LEADER)
       verifyClean()

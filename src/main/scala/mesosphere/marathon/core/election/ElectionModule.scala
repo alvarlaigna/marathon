@@ -1,10 +1,10 @@
 package mesosphere.marathon
 package core.election
 
-import akka.actor.ActorSystem
+import akka.actor.{ ActorSystem, Cancellable }
 import akka.event.EventStream
+import akka.stream.scaladsl.Source
 import mesosphere.marathon.core.base.{ CrashStrategy, LifecycleState }
-import mesosphere.marathon.core.election.impl.{ CuratorElectionService, PseudoElectionService }
 
 class ElectionModule(
     config: MarathonConf,
@@ -14,27 +14,20 @@ class ElectionModule(
     lifecycleState: LifecycleState,
     crashStrategy: CrashStrategy) {
 
-  lazy val service: ElectionService = if (config.highlyAvailable()) {
+  lazy private val electionBackend: Source[LeadershipState, Cancellable] = if (config.highlyAvailable()) {
     config.leaderElectionBackend.get match {
       case Some("curator") =>
-        new CuratorElectionService(
-          config,
-          hostPort,
-          system,
-          eventStream,
-          lifecycleState,
-          crashStrategy
-        )
+        CuratorElectionStream(config, hostPort)(system)
       case backend: Option[String] =>
         throw new IllegalArgumentException(s"Leader election backend $backend not known!")
     }
   } else {
-    new PseudoElectionService(
-      hostPort,
-      system,
-      eventStream,
-      lifecycleState,
-      crashStrategy
-    )
+    PsuedoElectionStream()
   }
+
+  private def onSuicide(): Unit = {
+    crashStrategy.crash()
+  }
+
+  lazy val service: ElectionService = new ElectionServiceImpl(hostPort, electionBackend, crashStrategy)(system)
 }
